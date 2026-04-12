@@ -1,35 +1,44 @@
-
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectOutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.SocketException;
-import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
 
-class ClientUDP {
+public class ClientUDP {
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
+        if (args.length < 1) {
+            System.out.println("Uso: java ClientUDP <payload>");
+            return;
+        }
+
         try (DatagramSocket socket = new DatagramSocket()) {
+            String requestId = System.currentTimeMillis() + "-1";
+            
+            Message msg = new Message(
+                    "REQUEST",
+                    "",
+                    "CLIENT",
+                    "localhost",
+                    socket.getLocalPort(),
+                    requestId,
+                    args[0],
+                    String.valueOf(System.currentTimeMillis())
+            );
+            
+            byte[] sendData = msg.toJson().getBytes(StandardCharsets.UTF_8);
+            
             InetAddress address = InetAddress.getByName("localhost");
-            Message message = new Message("Hello, Server!", socket.getLocalPort());
-
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            ObjectOutputStream objectOutputStream = new ObjectOutputStream(outputStream);
-            objectOutputStream.writeObject(message);
-            byte[] data = outputStream.toByteArray();
-
-            DatagramPacket packet = new DatagramPacket(data, data.length, address, 9003);
-            socket.send(packet);
-            System.out.println("Message sent to server.");
-        } catch (UnknownHostException | SocketException e) {
-            System.err.println("Network setup error: " + e.getMessage());
-        } catch (IOException e) {
-            System.err.println("Error serializing or sending UDP message: " + e.getMessage());
+            DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, address, 9000);
+            socket.send(sendPacket);
+            
+            byte[] receiveBuffer = new byte[4096];
+            DatagramPacket receivePacket = new DatagramPacket(receiveBuffer, receiveBuffer.length);
+            socket.receive(receivePacket);
+            
+            String responseJson = new String(receivePacket.getData(), 0, receivePacket.getLength(), StandardCharsets.UTF_8);
+            Message response = Message.fromJson(responseJson);
+            
+            System.out.println(response.payload());
         }
     }
-
 }
-
-

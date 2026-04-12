@@ -32,7 +32,9 @@ public class InstanceInfo{
         return port;
     }
 
-
+    public boolean isAlive(long now) {
+        return now - lastSeen <= 15000;
+    }   
 
     
 }

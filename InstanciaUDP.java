@@ -19,16 +19,18 @@ public class InstanciaUDP {
     }
 
     public void start(){
-        System.out.println("Iniciando uma instancia");
+        System.out.println("[START] Iniciando instancia " + instanceID + " do tipo " + componentType + " na porta " + localPort);
         
         try(DatagramSocket socket = new DatagramSocket(localPort)){
+            System.out.println("[REGISTER] Solicitando registro no gateway " + gatewayHost + ":" + gatewayPort + " ...");
             Message message = new Message("REGISTER", componentType, instanceID, gatewayHost,localPort, "", "", String.valueOf(System.currentTimeMillis()));
             sendMessage(socket, message);
             new Thread(() -> {
                 while (true) {
                     try {
-                        Thread.sleep(5000);
-
+                        Thread.sleep(15000);
+                        // Comentado para num teste de carga no inundar seu log:
+                        // System.out.println("[HEARTBEAT] Enviando pulso de vida...");
                         sendMessage(socket, new Message(
                                 "HEARTBEAT",
                                 componentType,
@@ -46,34 +48,42 @@ public class InstanciaUDP {
                 }
             }).start();
 
+            System.out.println("[INFO] Instância pronta e aguardando requisições...");
             while (true) { 
-                byte[] buf = new byte[2048]; 
-                DatagramPacket packet = new DatagramPacket(buf, buf.length);
-                socket.receive(packet); 
-                String json = new String(packet.getData(), 0, packet.getLength());
-                Message msg = Message.fromJson(json);
+                try {
+                    byte[] buf = new byte[4096]; 
+                    DatagramPacket packet = new DatagramPacket(buf, buf.length);
+                    socket.receive(packet); 
+                    String json = new String(packet.getData(), 0, packet.getLength());
+                    Message msg = Message.fromJson(json);
 
-                String type = msg.type();
+                    String type = msg.type();
 
-                if ("REQUEST".equals(type)) {
-
-                    Message response = new Message(
-                            "RESPONSE",
-                            msg.componentType(),                 
-                            instanceID,                
-                            "localhost",         
-                            localPort,                 
-                            msg.requestId(),           
-                            "OK from " + instanceID,   
-                            String.valueOf(System.currentTimeMillis()) 
-                    );
-                    sendMessage(socket, response);
+                    if ("REQUEST".equals(type)) {
+                        System.out.println("[REQUEST] Recebido Request (ID: " + msg.requestId() + "). Payload: '" + msg.payload() + "'. Preparando resposta...");
+                        
+                        Message response = new Message(
+                                "RESPONSE",
+                                msg.componentType(),                 
+                                instanceID,                
+                                "localhost",         
+                                localPort,                 
+                                msg.requestId(),           
+                                "OK from " + instanceID,   
+                                String.valueOf(System.currentTimeMillis()) 
+                        );
+                        sendMessage(socket, response);
+                        System.out.println("[RESPONSE] Resposta enviada com sucesso ao Gateway.");
+                    }
+                } catch (Exception e) {
+                    System.err.println("Erro ao processar pacote na Instancia: " + e.getMessage());
                 }
-            }}
+            }
+        }
         catch (Exception e) {
             e.printStackTrace();
-        }}
-
+        }
+    }
     
     private void sendMessage(DatagramSocket socket, Message msg) throws Exception {
         byte[] data = msg.toJson().getBytes();
