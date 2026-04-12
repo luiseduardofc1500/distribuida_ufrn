@@ -15,8 +15,8 @@ public class ClientUDP {
             String requestId = System.currentTimeMillis() + "-1";
             
             Message msg = new Message(
-                    "REQUEST",
-                    "LOGIN",
+                    MessageType.REQUEST,
+                    ComponentType.LOGIN,
                     "CLIENT",
                     "localhost",
                     socket.getLocalPort(),

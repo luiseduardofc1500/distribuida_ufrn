@@ -17,8 +17,8 @@ public class GatewayUDP {
     private static final int GATEWAY_PORT = 9000;
     private static final long TIMEOUT = 15000;
 
-    private static final Map<String, List<InstanceInfo>> registry = new ConcurrentHashMap<>();
-    private static final Map<String, AtomicInteger> roundRobinIndex = new ConcurrentHashMap<>();
+    private static final Map<ComponentType, List<InstanceInfo>> registry = new ConcurrentHashMap<>();
+    private static final Map<ComponentType, AtomicInteger> roundRobinIndex = new ConcurrentHashMap<>();
     private static final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
 
     private static final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
@@ -57,9 +57,9 @@ public class GatewayUDP {
             Message msg = Message.fromJson(json);
 
             switch (msg.type()) {
-                case "REGISTER", "HEARTBEAT" -> handleManagement(msg);
-                case "REQUEST" -> handleRequest(msg, packet);
-                case "RESPONSE" -> handleResponse(msg);
+                case REGISTER, HEARTBEAT -> handleManagement(msg, packet);
+                case REQUEST -> handleRequest(msg, packet);
+                case RESPONSE -> handleResponse(msg);
             }
 
         } catch (Exception e) {
@@ -68,40 +68,48 @@ public class GatewayUDP {
     }
 
     
-    private static void handleManagement(Message msg) {
+    private static void handleManagement(Message msg, DatagramPacket packet) {
         long now = System.currentTimeMillis();
-        String component = msg.componentType();
+        ComponentType component = msg.componentType();
         String id = msg.instanceId();
+        String host = msg.host();
+        int port = msg.port();
+        String identity = id + host + port;
 
         List<InstanceInfo> list = registry.computeIfAbsent(component, key -> new CopyOnWriteArrayList<>());
 
-        InstanceInfo existing = list.stream().filter(instance ->  instance.getInstanceId()
-                                                            .equals(id))
+        InstanceInfo existing = list.stream().filter(instance ->  instance.getIdentity()
+                                                            .equals(identity))
                                                             .findFirst()
                                                             .orElse(null);
 
-        if ("REGISTER".equals(msg.type())) {
-            if (existing != null) {
-                System.out.println("[WARNING] Conflito: A instancia " + id + " do tipo " + component + " ja existe! Ignorando.");
-                return;
-            }
-            System.out.println("[REGISTER] Cadastrando nova instancia: " + id + " (" + component + ")");
-            list.add(new InstanceInfo(id, msg.host(), msg.port(), now));
+        if (existing == null) {
+            System.out.println("[NEW_INSTANCE] Adicionando: " + identity + " (" + component + ")");
+            list.add(new InstanceInfo(id, host, port, now));
             roundRobinIndex.putIfAbsent(component, new AtomicInteger(0));
-            
-        } else if ("HEARTBEAT".equals(msg.type())) {
-            if (existing != null) {
-                existing.setLastSeen(now);
-                System.out.println("[HEARTBEAT] Recebido pulso de vida de " + id + " (" + component + ")");
+        } else {
+            existing.setLastSeen(now);
+            if (msg.type() == MessageType.HEARTBEAT) {
+                System.out.println("[HEARTBEAT] Recebido pulso de vida de " + identity + " (" + component + ")");
             } else {
-                System.out.println("[WARNING] Recebido heartbeat de instancia nao registrada: " + id + " (" + component + ")");
+                System.out.println("[REGISTER] Atualizando registro de: " + identity + " (" + component + ")");
+            }
+        }
+
+        if (msg.type() == MessageType.REGISTER) {
+            try {
+                Message successResponse = new Message(MessageType.RESPONSE, component, id, "localhost", GATEWAY_PORT, "REGISTER", "OK", String.valueOf(now));
+                byte[] data = successResponse.toJson().getBytes(StandardCharsets.UTF_8);
+                socket.send(new DatagramPacket(data, data.length, packet.getAddress(), packet.getPort()));
+            } catch (Exception e) {
+                System.err.println("Erro ao enviar resposta de sucesso: " + e.getMessage());
             }
         }
     }
 
     private static void handleRequest(Message msg, DatagramPacket packet) throws Exception {
         long now = System.currentTimeMillis();
-        String component = msg.componentType();
+        ComponentType component = msg.componentType();
 
         List<InstanceInfo> list = registry.get(component);
 
@@ -124,7 +132,7 @@ public class GatewayUDP {
 
         InstanceInfo target = alive.get(Math.abs(currentIndex) % alive.size());
 
-        System.out.println("[FORWARD] " + msg.requestId() + " -> " + target.getInstanceId());
+        System.out.println("[FORWARD] " + msg.requestId() + " -> " + target.getIdentity());
 
         pendingRequests.put(msg.requestId(),
                 new PendingRequest(
@@ -166,7 +174,7 @@ public class GatewayUDP {
                 list.removeIf(instance -> {
                     boolean expired = (now - instance.getLastSeen() > TIMEOUT);
                     if (expired) {
-                        System.out.println("[TIMEOUT] Instancia removida por inatividade: " + instance.getInstanceId() + " (" + component + ")");
+                        System.out.println("[TIMEOUT] Instancia removida por inatividade: " + instance.getIdentity() + " (" + component + ")");
                     }
                     return expired;
                 });
@@ -179,8 +187,8 @@ public class GatewayUDP {
 
     private static void sendError(DatagramPacket packet, String requestId, long now) throws Exception {
         Message error = new Message(
-                "RESPONSE",
-                "GATEWAY",
+                MessageType.RESPONSE,
+                ComponentType.GATEWAY,
                 "GATEWAY",
                 "localhost",
                 GATEWAY_PORT,

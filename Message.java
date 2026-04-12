@@ -3,8 +3,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public record Message(
-    String type,
-    String componentType,
+    MessageType type,
+    ComponentType componentType,
     String instanceId,
     String host,
     int port,
@@ -14,19 +14,18 @@ public record Message(
 ) implements Serializable {
     private static final long serialVersionUID = 1L;
 
-
     public String toJson() {
         return String.format(
             "{\"type\":\"%s\",\"componentType\":\"%s\",\"instanceId\":\"%s\",\"host\":\"%s\",\"port\":%d,\"requestId\":\"%s\",\"payload\":\"%s\",\"timestamp\":\"%s\"}",
-            escape(type), escape(componentType), escape(instanceId), escape(host), 
+            type.getValue(), componentType.getValue(), escape(instanceId), escape(host), 
             port, escape(requestId), escape(payload), escape(timestamp)
         );
     }
 
     public static Message fromJson(String json) {
         return new Message(
-            extract(json, "type"),
-            extract(json, "componentType"),
+            MessageType.fromString(extract(json, "type")),
+            ComponentType.fromString(extract(json, "componentType")),
             extract(json, "instanceId"),
             extract(json, "host"),
             parsePort(extract(json, "port")),

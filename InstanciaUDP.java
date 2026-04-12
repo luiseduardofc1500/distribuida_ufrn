@@ -4,15 +4,19 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 
 public class InstanciaUDP {
-    private static String componentType;
+    private static ComponentType componentType;
     private static String instanceID;
-    private static String gatewayHost = "localhost";
-    private static int gatewayPort = 9000;
+    private final static String gatewayHost = "localhost";
+    private final static int gatewayPort = 9000;
     private static int localPort;
 
     
     public static void main(String[] args) {
-        InstanciaUDP.componentType = args[0];
+        InstanciaUDP.componentType = ComponentType.fromString(args[0]);
+        if (InstanciaUDP.componentType == ComponentType.UNKNOWN) {
+            System.err.println("Componente desconhecido: " + args[0]);
+            System.exit(1);
+        }
         InstanciaUDP.instanceID = args[1];
         InstanciaUDP.localPort = Integer.parseInt(args[2]);
         new InstanciaUDP().start();
@@ -23,15 +27,41 @@ public class InstanciaUDP {
         
         try(DatagramSocket socket = new DatagramSocket(localPort)){
             System.out.println("[REGISTER] Solicitando registro no gateway " + gatewayHost + ":" + gatewayPort + " ...");
-            Message message = new Message("REGISTER", componentType, instanceID, gatewayHost,localPort, "", "", String.valueOf(System.currentTimeMillis()));
+            Message message = new Message(MessageType.REGISTER, componentType, instanceID, gatewayHost,localPort, "", "", String.valueOf(System.currentTimeMillis()));
             sendMessage(socket, message);
+            
+            boolean registered = false;
+            socket.setSoTimeout(5000); // Espera maximo 5s pela resposata
+            
+            while(!registered) {
+                try {
+                    byte[] buf = new byte[4096];
+                    DatagramPacket packet = new DatagramPacket(buf, buf.length);
+                    socket.receive(packet);
+                    String json = new String(packet.getData(), 0, packet.getLength());
+                    Message msg = Message.fromJson(json);
+
+                    if (msg.type() == MessageType.RESPONSE && "REGISTER".equals(msg.requestId())) {
+                        if ("OK".equals(msg.payload())) {
+                            System.out.println("[REGISTER] Registro confirmado pelo Gateway!");
+                            registered = true;
+                        }
+                    }
+                } catch (java.net.SocketTimeoutException e) {
+                    System.out.println("[REGISTER] Timeout de 5s expirou. Tentando registrar novamente...");
+                    sendMessage(socket, message);
+                }
+            }
+            
+            socket.setSoTimeout(0); // Reinicia o parametro para que os REQUESTs possam esperar indefinidamente
+
             new Thread(() -> {
                 while (true) {
                     try {
-                        Thread.sleep(15000);
+                        Thread.sleep(5000);
                         System.out.println("[HEARTBEAT] Enviando pulso de vida...");
                         sendMessage(socket, new Message(
-                                "HEARTBEAT",
+                                MessageType.HEARTBEAT,
                                 componentType,
                                 instanceID,
                                 "localhost",
@@ -56,13 +86,13 @@ public class InstanciaUDP {
                     String json = new String(packet.getData(), 0, packet.getLength());
                     Message msg = Message.fromJson(json);
 
-                    String type = msg.type();
+                    MessageType type = msg.type();
 
-                    if ("REQUEST".equals(type)) {
+                    if (type == MessageType.REQUEST) {
                         System.out.println("[REQUEST] Recebido Request (ID: " + msg.requestId() + "). Payload: '" + msg.payload() + "'. Preparando resposta...");
                         
                         Message response = new Message(
-                                "RESPONSE",
+                                MessageType.RESPONSE,
                                 msg.componentType(),                 
                                 instanceID,                
                                 "localhost",         

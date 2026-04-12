@@ -32,6 +32,10 @@ public class InstanceInfo{
         return port;
     }
 
+    public String getIdentity() {
+        return instanceId + host + port;
+    }
+
     public boolean isAlive(long now) {
         return now - lastSeen <= 15000;
     }   
