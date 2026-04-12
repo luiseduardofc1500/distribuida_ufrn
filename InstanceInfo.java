@@ -33,7 +33,7 @@ public class InstanceInfo{
     }
 
     public String getIdentity() {
-        return instanceId + host + port;
+        return instanceId + "|" + host + "|" + port;
     }
 
     public boolean isAlive(long now) {

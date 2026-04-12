@@ -1,6 +1,6 @@
 public enum ComponentType {
     LOGIN("LOGIN"),
-    PAYMENT("PAYMENT"),
+    SIGNUP("SIGNUP"),
     DATABASE("DATABASE"),
     GATEWAY("GATEWAY"),
     UNKNOWN("UNKNOWN");

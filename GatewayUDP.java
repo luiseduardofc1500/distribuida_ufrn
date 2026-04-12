@@ -54,16 +54,26 @@ public class GatewayUDP {
     private static void handle(DatagramPacket packet) {
         try {
             String json = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
-            Message msg = Message.fromJson(json);
+            Message msg = Message.fromHttpFormat(json);
+
+            if (msg.type() == MessageType.UNKNOWN) {
+                sendBadRequest(packet, msg.requestId() != null ? msg.requestId() : "unknown", System.currentTimeMillis());
+                return;
+            }
 
             switch (msg.type()) {
                 case REGISTER, HEARTBEAT -> handleManagement(msg, packet);
-                case REQUEST -> handleRequest(msg, packet);
-                case RESPONSE -> handleResponse(msg);
+                case GET, POST-> handleRequest(msg, packet);
+                case RESPONSE, ERROR -> handleResponse(msg);
             }
 
         } catch (Exception e) {
-            System.err.println("Erro: " + e.getMessage());
+            System.err.println("Erro processando pacote: " + e.getMessage());
+            try {
+                sendBadRequest(packet, "unknown", System.currentTimeMillis());
+            } catch (Exception sendEx) {
+                System.err.println("Erro ao tentar enviar BAD_REQUEST: " + sendEx.getMessage());
+            }
         }
     }
 
@@ -74,7 +84,7 @@ public class GatewayUDP {
         String id = msg.instanceId();
         String host = msg.host();
         int port = msg.port();
-        String identity = id + host + port;
+        String identity = id + "|" + host + "|" + port;
 
         List<InstanceInfo> list = registry.computeIfAbsent(component, key -> new CopyOnWriteArrayList<>());
 
@@ -99,7 +109,7 @@ public class GatewayUDP {
         if (msg.type() == MessageType.REGISTER) {
             try {
                 Message successResponse = new Message(MessageType.RESPONSE, component, id, "localhost", GATEWAY_PORT, "REGISTER", "OK", String.valueOf(now));
-                byte[] data = successResponse.toJson().getBytes(StandardCharsets.UTF_8);
+                byte[] data = successResponse.toHttpFormat().getBytes(StandardCharsets.UTF_8);
                 socket.send(new DatagramPacket(data, data.length, packet.getAddress(), packet.getPort()));
             } catch (Exception e) {
                 System.err.println("Erro ao enviar resposta de sucesso: " + e.getMessage());
@@ -140,7 +150,7 @@ public class GatewayUDP {
                         now
                 ));
 
-        byte[] data = msg.toJson().getBytes(StandardCharsets.UTF_8);
+        byte[] data = msg.toHttpFormat().getBytes(StandardCharsets.UTF_8);
 
         socket.send(new DatagramPacket(
                 data,
@@ -156,7 +166,7 @@ public class GatewayUDP {
 
         if (pendingReq == null) return;
 
-        byte[] data = msg.toJson().getBytes(StandardCharsets.UTF_8);
+        byte[] data = msg.toHttpFormat().getBytes(StandardCharsets.UTF_8);
 
         socket.send(new DatagramPacket(
                 data,
@@ -187,7 +197,7 @@ public class GatewayUDP {
 
     private static void sendError(DatagramPacket packet, String requestId, long now) throws Exception {
         Message error = new Message(
-                MessageType.RESPONSE,
+                MessageType.ERROR,
                 ComponentType.GATEWAY,
                 "GATEWAY",
                 "localhost",
@@ -197,7 +207,29 @@ public class GatewayUDP {
                 String.valueOf(now)
         );
 
-        byte[] data = error.toJson().getBytes(StandardCharsets.UTF_8);
+        byte[] data = error.toHttpFormat().getBytes(StandardCharsets.UTF_8);
+
+        socket.send(new DatagramPacket(
+                data,
+                data.length,
+                packet.getAddress(),
+                packet.getPort()
+        ));
+    }
+
+    private static void sendBadRequest(DatagramPacket packet, String requestId, long now) throws Exception {
+        Message error = new Message(
+                MessageType.ERROR,
+                ComponentType.GATEWAY,
+                "GATEWAY",
+                "localhost",
+                GATEWAY_PORT,
+                requestId,
+                "BAD_REQUEST",
+                String.valueOf(now)
+        );
+
+        byte[] data = error.toHttpFormat().getBytes(StandardCharsets.UTF_8);
 
         socket.send(new DatagramPacket(
                 data,

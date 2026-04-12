@@ -1,8 +1,10 @@
 public enum MessageType {
+    GET("GET"),
+    POST("POST"),
     REGISTER("REGISTER"),
     HEARTBEAT("HEARTBEAT"),
-    REQUEST("REQUEST"),
     RESPONSE("RESPONSE"),
+    ERROR("ERROR"),
     UNKNOWN("UNKNOWN");
 
     private final String value;

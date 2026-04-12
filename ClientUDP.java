@@ -15,7 +15,7 @@ public class ClientUDP {
             String requestId = System.currentTimeMillis() + "-1";
             
             Message msg = new Message(
-                    MessageType.REQUEST,
+                    MessageType.POST,
                     ComponentType.LOGIN,
                     "CLIENT",
                     "localhost",
@@ -25,7 +25,9 @@ public class ClientUDP {
                     String.valueOf(System.currentTimeMillis())
             );
             
-            byte[] sendData = msg.toJson().getBytes(StandardCharsets.UTF_8);
+                    // String wire = msg.toHttpFormat();
+                    // System.out.println("[SEND CLIENT] -> localhost:9000\n" + wire.replace("\r\n", "\n"));
+                    byte[] sendData = msg.toHttpFormat().getBytes(StandardCharsets.UTF_8);
             
             InetAddress address = InetAddress.getByName("localhost");
             DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, address, 9000);
@@ -36,7 +38,7 @@ public class ClientUDP {
             socket.receive(receivePacket);
             
             String responseJson = new String(receivePacket.getData(), 0, receivePacket.getLength(), StandardCharsets.UTF_8);
-            Message response = Message.fromJson(responseJson);
+            Message response = Message.fromHttpFormat(responseJson);
             
             System.out.println(response.payload());
         }
