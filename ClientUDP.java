@@ -16,7 +16,7 @@ public class ClientUDP {
             
             Message msg = new Message(
                     "REQUEST",
-                    "",
+                    "LOGIN",
                     "CLIENT",
                     "localhost",
                     socket.getLocalPort(),

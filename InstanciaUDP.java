@@ -29,8 +29,7 @@ public class InstanciaUDP {
                 while (true) {
                     try {
                         Thread.sleep(15000);
-                        // Comentado para num teste de carga no inundar seu log:
-                        // System.out.println("[HEARTBEAT] Enviando pulso de vida...");
+                        System.out.println("[HEARTBEAT] Enviando pulso de vida...");
                         sendMessage(socket, new Message(
                                 "HEARTBEAT",
                                 componentType,
