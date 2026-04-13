@@ -2,6 +2,7 @@
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 
 public class InstanciaUDP {
     private static ComponentType componentType;
@@ -9,9 +10,15 @@ public class InstanciaUDP {
     private final static String GATEWAY_HOST = "localhost";
     private final static int GATEWAY_PORT = 9000;
     private static int localPort;
+    private static final TicketStore ticketStore = new TicketStore("ingressos.txt");
 
     
     public static void main(String[] args) {
+        if (args.length < 3) {
+            System.err.println("Uso: java InstanciaUDP <componentType> <instanceID> <porta>");
+            System.exit(1);
+        }
+
         InstanciaUDP.componentType = ComponentType.fromString(args[0]);
         if (InstanciaUDP.componentType == ComponentType.UNKNOWN) {
             System.err.println("Componente desconhecido: " + args[0]);
@@ -93,18 +100,8 @@ public class InstanciaUDP {
                     MessageType type = msg.type();
 
                     if (type == MessageType.GET || type == MessageType.POST) {
-                        System.out.println("[" + type + "] Recebido (ID: " + msg.requestId() + "). Payload: '" + msg.payload() + "'. Preparando resposta...");
-                        
-                        Message response = new Message(
-                                MessageType.RESPONSE,
-                                msg.componentType(),                 
-                                instanceID,                
-                                "localhost",         
-                                localPort,                 
-                                msg.requestId(),           
-                                "OK from " + instanceID,   
-                                String.valueOf(System.currentTimeMillis()) 
-                        );
+                        System.out.println("[" + type + "] Recebido (ID: " + msg.requestId() + "). Payload: '" + msg.payload() + "'.");
+                        Message response = handleBusinessRequest(msg);
                         sendMessage(socket, response);
                         System.out.println("[RESPONSE] Resposta enviada com sucesso ao Gateway.");
                     }
@@ -121,7 +118,7 @@ public class InstanciaUDP {
     private void sendMessage(DatagramSocket socket, Message msg) throws Exception {
         String wire = msg.toHttpFormat();
         System.out.println("[SEND INSTANCE] -> " + GATEWAY_HOST + ":" + GATEWAY_PORT + "\n" + wire.replace("\r\n", "\n"));
-        byte[] data = wire.getBytes();
+        byte[] data = wire.getBytes(StandardCharsets.UTF_8);
 
         DatagramPacket packet = new DatagramPacket(
                 data,
@@ -131,6 +128,69 @@ public class InstanciaUDP {
         );
 
         socket.send(packet);
+    }
+
+    private Message handleBusinessRequest(Message msg) {
+        long now = System.currentTimeMillis();
+
+        try {
+            if (msg.componentType() == ComponentType.INGRESSOS_DISPONIVEIS) {
+                if (msg.type() != MessageType.GET) {
+                    return buildError(msg, "ERRO: use GET para ingressos_disponiveis", now);
+                }
+
+                String available = ticketStore.listAvailableTickets();
+                return buildResponse(msg, available, now);
+            }
+
+            if (msg.componentType() == ComponentType.COMPRAR_INGRESSO) {
+                if (msg.type() != MessageType.POST) {
+                    return buildError(msg, "ERRO: use POST para comprar_ingresso", now);
+                }
+
+                String payload = msg.payload() == null ? "" : msg.payload().trim();
+                if (payload.isEmpty() || !payload.matches("\\d+")) {
+                    return buildError(msg, "ERRO: payload invalido, informe o numero do ingresso", now);
+                }
+
+                int ticketNumber = Integer.parseInt(payload);
+                String result = ticketStore.buyTicket(ticketNumber);
+                if (result.contains("SUCESSO")) {
+                    return buildResponse(msg, result, now);
+                }
+                return buildError(msg, result, now);
+            }
+
+            return buildError(msg, "ERRO: componente nao suportado", now);
+        } catch (Exception e) {
+            return buildError(msg, "ERRO: falha de persistencia", now);
+        }
+    }
+
+    private Message buildResponse(Message request, String payload, long now) {
+        return new Message(
+                MessageType.RESPONSE,
+                request.componentType(),
+                instanceID,
+                "localhost",
+                localPort,
+                request.requestId(),
+                payload,
+                String.valueOf(now)
+        );
+    }
+
+    private Message buildError(Message request, String payload, long now) {
+        return new Message(
+                MessageType.ERROR,
+                request.componentType(),
+                instanceID,
+                "localhost",
+                localPort,
+                request.requestId(),
+                payload,
+                String.valueOf(now)
+        );
     }
 
 }

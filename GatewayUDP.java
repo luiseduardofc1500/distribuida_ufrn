@@ -65,6 +65,7 @@ public class GatewayUDP {
                 case REGISTER, HEARTBEAT -> handleManagement(msg, packet);
                 case GET, POST-> handleRequest(msg, packet);
                 case RESPONSE, ERROR -> handleResponse(msg);
+                case UNKNOWN -> sendBadRequest(packet, msg.requestId() != null ? msg.requestId() : "unknown", System.currentTimeMillis());
             }
 
         } catch (Exception e) {

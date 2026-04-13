@@ -7,7 +7,32 @@ public class ClientUDP {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
-            System.out.println("Uso: java ClientUDP <payload>");
+            System.out.println("Uso:");
+            System.out.println("  java ClientUDP ingressos_disponiveis");
+            System.out.println("  java ClientUDP comprar_ingresso <numero_ingresso>");
+            return;
+        }
+
+        MessageType type;
+        ComponentType componentType;
+        String payload;
+
+        String operation = args[0].trim().toUpperCase();
+        if ("INGRESSOS_DISPONIVEIS".equals(operation)) {
+            type = MessageType.GET;
+            componentType = ComponentType.INGRESSOS_DISPONIVEIS;
+            payload = "";
+        } else if ("COMPRAR_INGRESSO".equals(operation)) {
+            if (args.length < 2) {
+                System.out.println("Informe o numero do ingresso para compra.");
+                return;
+            }
+            type = MessageType.POST;
+            componentType = ComponentType.COMPRAR_INGRESSO;
+            payload = args[1];
+        } else {
+            System.out.println("Operacao invalida: " + args[0]);
+            System.out.println("Operacoes aceitas: ingressos_disponiveis, comprar_ingresso");
             return;
         }
 
@@ -15,19 +40,17 @@ public class ClientUDP {
             String requestId = System.currentTimeMillis() + "-1";
             
             Message msg = new Message(
-                    MessageType.POST,
-                    ComponentType.LOGIN,
+                    type,
+                    componentType,
                     "CLIENT",
                     "localhost",
                     socket.getLocalPort(),
                     requestId,
-                    args[0],
+                    payload,
                     String.valueOf(System.currentTimeMillis())
             );
             
-                    // String wire = msg.toHttpFormat();
-                    // System.out.println("[SEND CLIENT] -> localhost:9000\n" + wire.replace("\r\n", "\n"));
-                    byte[] sendData = msg.toHttpFormat().getBytes(StandardCharsets.UTF_8);
+            byte[] sendData = msg.toHttpFormat().getBytes(StandardCharsets.UTF_8);
             
             InetAddress address = InetAddress.getByName("localhost");
             DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, address, 9000);
@@ -40,6 +63,7 @@ public class ClientUDP {
             String responseJson = new String(receivePacket.getData(), 0, receivePacket.getLength(), StandardCharsets.UTF_8);
             Message response = Message.fromHttpFormat(responseJson);
             
+            System.out.println("Status: " + response.type());
             System.out.println(response.payload());
         }
     }
