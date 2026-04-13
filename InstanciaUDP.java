@@ -78,6 +78,10 @@ public class InstanciaUDP {
             }).start();
 
             System.out.println("[INFO] Instância pronta e aguardando requisições...");
+
+
+
+            
             while (true) { 
                 try {
                     byte[] buf = new byte[4096]; 
