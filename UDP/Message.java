@@ -1,3 +1,4 @@
+package UDP;
 import java.io.Serializable;
 
 public record Message(

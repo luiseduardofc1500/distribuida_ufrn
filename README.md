@@ -1,1 +1,0 @@
-# distribuida_ufrn

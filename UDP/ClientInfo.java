@@ -1,6 +1,7 @@
+package UDP;
 public class ClientInfo {
-   private String host;
-   private int port;
+   private final String host;
+   private final int port;
 
     public ClientInfo(String host, int port){
         this.host = host;

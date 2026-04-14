@@ -1,3 +1,4 @@
+package UDP;
 public class InstanceInfo{
     String instanceId;
     String host;

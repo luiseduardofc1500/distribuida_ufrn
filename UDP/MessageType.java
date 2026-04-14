@@ -1,3 +1,4 @@
+package UDP;
 public enum MessageType {
     GET("GET"),
     POST("POST"),

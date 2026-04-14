@@ -1,10 +1,12 @@
+package UDP;
+
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 
-public class InstanciaUDP {
+public class InstanceUDP {
     private static ComponentType componentType;
     private static String instanceID;
     private final static String GATEWAY_HOST = "localhost";
@@ -15,18 +17,18 @@ public class InstanciaUDP {
     
     public static void main(String[] args) {
         if (args.length < 3) {
-            System.err.println("Uso: java InstanciaUDP <componentType> <instanceID> <porta>");
+            System.err.println("Uso: java InstanceUDP <componentType> <instanceID> <porta>");
             System.exit(1);
         }
 
-        InstanciaUDP.componentType = ComponentType.fromString(args[0]);
-        if (InstanciaUDP.componentType == ComponentType.UNKNOWN) {
+        InstanceUDP.componentType = ComponentType.fromString(args[0]);
+        if (InstanceUDP.componentType == ComponentType.UNKNOWN) {
             System.err.println("Componente desconhecido: " + args[0]);
             System.exit(1);
         }
-        InstanciaUDP.instanceID = args[1];
-        InstanciaUDP.localPort = Integer.parseInt(args[2]);
-        new InstanciaUDP().start();
+        InstanceUDP.instanceID = args[1];
+        InstanceUDP.localPort = Integer.parseInt(args[2]);
+        new InstanceUDP().start();
     }
 
     public void start(){
@@ -102,8 +104,10 @@ public class InstanciaUDP {
                     if (type == MessageType.GET || type == MessageType.POST) {
                         System.out.println("[" + type + "] Recebido (ID: " + msg.requestId() + "). Payload: '" + msg.payload() + "'.");
                         Message response = handleBusinessRequest(msg);
-                        sendMessage(socket, response);
-                        System.out.println("[RESPONSE] Resposta enviada com sucesso ao Gateway.");
+                        if (response != null) {
+                            sendMessage(socket, response);
+                            System.out.println("[RESPONSE] Resposta enviada com sucesso ao Gateway.");
+                        }
                     }
                 } catch (Exception e) {
                     System.err.println("Erro ao processar pacote na Instancia: " + e.getMessage());
@@ -136,7 +140,7 @@ public class InstanciaUDP {
         try {
             if (msg.componentType() == ComponentType.INGRESSOS_DISPONIVEIS) {
                 if (msg.type() != MessageType.GET) {
-                    return buildError(msg, "ERRO: use GET para ingressos_disponiveis", now);
+                    return null;
                 }
 
                 String available = ticketStore.listAvailableTickets();
@@ -145,12 +149,12 @@ public class InstanciaUDP {
 
             if (msg.componentType() == ComponentType.COMPRAR_INGRESSO) {
                 if (msg.type() != MessageType.POST) {
-                    return buildError(msg, "ERRO: use POST para comprar_ingresso", now);
+                    return null;
                 }
 
                 String payload = msg.payload() == null ? "" : msg.payload().trim();
                 if (payload.isEmpty() || !payload.matches("\\d+")) {
-                    return buildError(msg, "ERRO: payload invalido, informe o numero do ingresso", now);
+                    return null;
                 }
 
                 int ticketNumber = Integer.parseInt(payload);
@@ -158,31 +162,18 @@ public class InstanciaUDP {
                 if (result.contains("SUCESSO")) {
                     return buildResponse(msg, result, now);
                 }
-                return buildError(msg, result, now);
+                return null;
             }
 
-            return buildError(msg, "ERRO: componente nao suportado", now);
+            return null;
         } catch (Exception e) {
-            return buildError(msg, "ERRO: falha de persistencia", now);
+            return null;
         }
     }
 
     private Message buildResponse(Message request, String payload, long now) {
         return new Message(
                 MessageType.RESPONSE,
-                request.componentType(),
-                instanceID,
-                "localhost",
-                localPort,
-                request.requestId(),
-                payload,
-                String.valueOf(now)
-        );
-    }
-
-    private Message buildError(Message request, String payload, long now) {
-        return new Message(
-                MessageType.ERROR,
                 request.componentType(),
                 instanceID,
                 "localhost",

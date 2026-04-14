@@ -1,3 +1,5 @@
+package UDP;
+
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -57,7 +59,6 @@ public class GatewayUDP {
             Message msg = Message.fromHttpFormat(json);
 
             if (msg.type() == MessageType.UNKNOWN) {
-                sendBadRequest(packet, msg.requestId() != null ? msg.requestId() : "unknown", System.currentTimeMillis());
                 return;
             }
 
@@ -65,16 +66,10 @@ public class GatewayUDP {
                 case REGISTER, HEARTBEAT -> handleManagement(msg, packet);
                 case GET, POST-> handleRequest(msg, packet);
                 case RESPONSE, ERROR -> handleResponse(msg);
-                case UNKNOWN -> sendBadRequest(packet, msg.requestId() != null ? msg.requestId() : "unknown", System.currentTimeMillis());
             }
 
         } catch (Exception e) {
             System.err.println("Erro processando pacote: " + e.getMessage());
-            try {
-                sendBadRequest(packet, "unknown", System.currentTimeMillis());
-            } catch (Exception sendEx) {
-                System.err.println("Erro ao tentar enviar BAD_REQUEST: " + sendEx.getMessage());
-            }
         }
     }
 
@@ -125,7 +120,6 @@ public class GatewayUDP {
         List<InstanceInfo> list = registry.get(component);
 
         if (list == null || list.isEmpty()) {
-            sendError(packet, msg.requestId(), now);
             return;
         }
 
@@ -134,7 +128,6 @@ public class GatewayUDP {
                 .toList();
 
         if (alive.isEmpty()) {
-            sendError(packet, msg.requestId(), now);
             return;
         }
 
@@ -163,6 +156,10 @@ public class GatewayUDP {
 
  
     private static void handleResponse(Message msg) throws Exception {
+        if (msg.type() != MessageType.RESPONSE) {
+            pendingRequests.remove(msg.requestId());
+            return;
+        }
         PendingRequest pendingReq = pendingRequests.remove(msg.requestId());
 
         if (pendingReq == null) return;
@@ -196,47 +193,4 @@ public class GatewayUDP {
         }, 5, 5, TimeUnit.SECONDS);
     }
 
-    private static void sendError(DatagramPacket packet, String requestId, long now) throws Exception {
-        Message error = new Message(
-                MessageType.ERROR,
-                ComponentType.GATEWAY,
-                "GATEWAY",
-                "localhost",
-                GATEWAY_PORT,
-                requestId,
-                "NO_INSTANCE",
-                String.valueOf(now)
-        );
-
-        byte[] data = error.toHttpFormat().getBytes(StandardCharsets.UTF_8);
-
-        socket.send(new DatagramPacket(
-                data,
-                data.length,
-                packet.getAddress(),
-                packet.getPort()
-        ));
-    }
-
-    private static void sendBadRequest(DatagramPacket packet, String requestId, long now) throws Exception {
-        Message error = new Message(
-                MessageType.ERROR,
-                ComponentType.GATEWAY,
-                "GATEWAY",
-                "localhost",
-                GATEWAY_PORT,
-                requestId,
-                "BAD_REQUEST",
-                String.valueOf(now)
-        );
-
-        byte[] data = error.toHttpFormat().getBytes(StandardCharsets.UTF_8);
-
-        socket.send(new DatagramPacket(
-                data,
-                data.length,
-                packet.getAddress(),
-                packet.getPort()
-        ));
-    }
 }
