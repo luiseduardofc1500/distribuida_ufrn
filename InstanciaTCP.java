@@ -20,7 +20,7 @@ public class InstanciaTCP {
     private static final int HEARTBEAT_PORT = 9000;
     private static final int HEARTBEAT_INTERVAL_MS = 3000;
     private static final int SERVER_BACKLOG = 200;
-    private static final int CLIENT_READ_TIMEOUT_MS = 3000;
+    private static final int CLIENT_READ_TIMEOUT_MS = 10000;
     private static final int HEARTBEAT_CONNECT_TIMEOUT_MS = 2000;
     private static int localPort;
 
@@ -163,6 +163,7 @@ public class InstanciaTCP {
 
         response.setHeader("Content-Type: text/plain; charset=utf-8");
         response.setHeader("Content-Length: " + length);
+        response.setHeader("Connection: close");
         response.setContentLength(length);
         response.setBody(safeBody);
 
@@ -201,8 +202,9 @@ public class InstanciaTCP {
 
             String line;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                if (line.startsWith("Content-Length:")) {
-                    request.setContentLength(line);
+                Integer parsedLength = extractContentLength(line);
+                if (parsedLength != null) {
+                    request.setContentLength(parsedLength);
                 }
 
                 headersBuilder.append(line).append("\r\n");
@@ -221,12 +223,39 @@ public class InstanciaTCP {
                     totalRead += read;
                 }
 
+                if (totalRead < request.getContentLength()) {
+                    return null;
+                }
+
                 request.setBody(body);
             }
 
             return request;
         } catch (IOException e) {
             e.printStackTrace();
+            return null;
+        }
+    }
+
+    private Integer extractContentLength(String line) {
+        if (line == null) {
+            return null;
+        }
+
+        int sep = line.indexOf(':');
+        if (sep <= 0) {
+            return null;
+        }
+
+        String name = line.substring(0, sep).trim();
+        if (!"Content-Length".equalsIgnoreCase(name)) {
+            return null;
+        }
+
+        String value = line.substring(sep + 1).trim();
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
             return null;
         }
     }

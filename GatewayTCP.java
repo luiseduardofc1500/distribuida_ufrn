@@ -27,7 +27,7 @@ public class GatewayTCP {
     private static final int HEARTBEAT_BACKLOG = 200;
     private static final int GATEWAY_BACKLOG = 1500;
     private static final int HEARTBEAT_READ_TIMEOUT_MS = 2000;
-    private static final int CLIENT_READ_TIMEOUT_MS = 3000;
+    private static final int CLIENT_READ_TIMEOUT_MS = 10000;
     private static final int SERVICE_CONNECT_TIMEOUT_MS = 2000;
     private static final int SERVICE_READ_TIMEOUT_MS = 10000;
 
@@ -177,6 +177,7 @@ public class GatewayTCP {
 
         response.setHeader("Content-Type: text/plain; charset=utf-8");
         response.setHeader("Content-Length: " + length);
+        response.setHeader("Connection: close");
         response.setContentLength(length);
         response.setBody(safeBody);
         return response;
@@ -281,8 +282,9 @@ public class GatewayTCP {
 
             String line;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                if (line.startsWith("Content-Length:")) {
-                    request.setContentLength(line);
+                Integer parsedLength = extractContentLength(line);
+                if (parsedLength != null) {
+                    request.setContentLength(parsedLength);
                 }
 
                 headersBuilder.append(line).append("\r\n");
@@ -300,6 +302,10 @@ public class GatewayTCP {
                         break;
                     }
                     totalRead += read;
+                }
+
+                if (totalRead < request.getContentLength()) {
+                    return null;
                 }
 
                 request.setBody(body);
@@ -326,8 +332,9 @@ public class GatewayTCP {
 
             String line;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                if (line.startsWith("Content-Length:")) {
-                    response.setContentLength(line);
+                Integer parsedLength = extractContentLength(line);
+                if (parsedLength != null) {
+                    response.setContentLength(parsedLength);
                 }
 
                 headersBuilder.append(line).append("\r\n");
@@ -346,12 +353,39 @@ public class GatewayTCP {
                     totalRead += read;
                 }
 
+                if (totalRead < response.getContentLength()) {
+                    return null;
+                }
+
                 response.setBody(body);
             }
 
             return response;
         } catch (IOException e) {
             e.printStackTrace();
+            return null;
+        }
+    }
+
+    private Integer extractContentLength(String line) {
+        if (line == null) {
+            return null;
+        }
+
+        int sep = line.indexOf(':');
+        if (sep <= 0) {
+            return null;
+        }
+
+        String name = line.substring(0, sep).trim();
+        if (!"Content-Length".equalsIgnoreCase(name)) {
+            return null;
+        }
+
+        String value = line.substring(sep + 1).trim();
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
             return null;
         }
     }

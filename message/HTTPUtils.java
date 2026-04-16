@@ -10,6 +10,8 @@ public class HTTPUtils {
                 return "OK";
             case 400:
                 return "Bad Request";
+            case 404:
+                return "Not Found";
             case 405:
                 return "Method Not Allowed";
             case 500:
