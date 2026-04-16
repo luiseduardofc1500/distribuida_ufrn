@@ -125,9 +125,9 @@ public class GatewayUDP {
         InstanceInfo target;
 
         if ("/isemail".equalsIgnoreCase(path)) {
-            target = getNextService(isEmailServices, isEmailIndex);
+            target = roundRobin(isEmailServices, isEmailIndex);
         } else if ("/ispassword".equalsIgnoreCase(path)) {
-            target = getNextService(isPasswordServices, isPasswordIndex);
+            target = roundRobin(isPasswordServices, isPasswordIndex);
         } else {
             sendErrorToClient(packet, 404, "Not Found");
             return;
@@ -214,7 +214,7 @@ public class GatewayUDP {
 
         String[] tokens = body.trim().split(":");
         if (tokens.length < 3) {
-            System.err.println("Heartbeat invalido: " + body);
+            System.err.println(" XIIIIIIIII Heartbeat invalido: " + body);
             return;
         }
 
@@ -252,7 +252,7 @@ public class GatewayUDP {
         }
     }
 
-    private InstanceInfo getNextService(ConcurrentHashMap<String, InstanceInfo> serviceHashMap, AtomicInteger index) {
+    private InstanceInfo roundRobin(ConcurrentHashMap<String, InstanceInfo> serviceHashMap, AtomicInteger index) {
         long now = System.currentTimeMillis();
         List<InstanceInfo> servicesOnline = new ArrayList<>();
 

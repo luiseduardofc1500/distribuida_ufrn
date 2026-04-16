@@ -10,7 +10,7 @@ import message.HTTPResponse;
 import message.HTTPUtils;
 import message.HttpRequest;
 
-public class InstanciaUDP {
+public class InstanceUDP {
     private static String serviceType;
     private static String instanceId;
     private static final String GATEWAY_HOST = "localhost";
@@ -32,7 +32,7 @@ public class InstanciaUDP {
 
         instanceId = args[1].trim();
         localPort = Integer.parseInt(args[2]);
-        new InstanciaUDP().start();
+        new InstanceUDP().start();
     }
 
     public void start() {
