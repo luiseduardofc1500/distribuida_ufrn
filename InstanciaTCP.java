@@ -19,9 +19,8 @@ public class InstanciaTCP {
     private static final String GATEWAY_HOST = "localhost";
     private static final int HEARTBEAT_PORT = 9000;
     private static final int HEARTBEAT_INTERVAL_MS = 3000;
-    private static final int SERVER_BACKLOG = 200;
-    private static final int CLIENT_READ_TIMEOUT_MS = 10000;
-    private static final int HEARTBEAT_CONNECT_TIMEOUT_MS = 2000;
+    private static final int SERVER_BACKLOG = 1500;
+    private static final int HEARTBEAT_WAKE_TIMEOUT_MS = 2000;
     private static int localPort;
 
     private static final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -90,7 +89,7 @@ public class InstanciaTCP {
         try (Socket socket = new Socket()) {
             socket.connect(
                     new InetSocketAddress(GATEWAY_HOST, HEARTBEAT_PORT),
-                    HEARTBEAT_CONNECT_TIMEOUT_MS);
+                    HEARTBEAT_WAKE_TIMEOUT_MS);
             OutputStream output = socket.getOutputStream();
             byte[] data = request.toString().getBytes(StandardCharsets.UTF_8);
             output.write(data);
@@ -100,20 +99,24 @@ public class InstanciaTCP {
 
     private void handleConnection(Socket socket) {
         try (socket) {
-            socket.setSoTimeout(CLIENT_READ_TIMEOUT_MS);
+            socket.setSoTimeout(15000); // timeout generoso tbm pro keepalive do worker
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-            HttpRequest request = readHttpRequest(reader);
+            
+            while (true) {
+                HttpRequest request = readHttpRequest(reader);
+                if (request == null) break;
 
-            if (request == null) {
-                writeResponse(socket, buildResponse(400, "Bad Request", null));
-                return;
+                HTTPResponse response = handleRequest(request);
+                writeResponse(socket, response);
+
+                String connHeader = request.getHeader("Connection");
+                if ("close".equalsIgnoreCase(connHeader)) {
+                    break;
+                }
             }
-
-            HTTPResponse response = handleRequest(request);
-            writeResponse(socket, response);
         } catch (Exception e) {
-            System.err.println("Erro ao processar requisicao TCP: " + e.getMessage());
+             // cliente fechou a conexão
         }
     }
 
@@ -163,7 +166,6 @@ public class InstanciaTCP {
 
         response.setHeader("Content-Type: text/plain; charset=utf-8");
         response.setHeader("Content-Length: " + length);
-        response.setHeader("Connection: close");
         response.setContentLength(length);
         response.setBody(safeBody);
 
@@ -190,73 +192,39 @@ public class InstanciaTCP {
 
     private HttpRequest readHttpRequest(BufferedReader reader) {
         StringBuilder headersBuilder = new StringBuilder();
-        String firstHeader;
-
         try {
-            firstHeader = reader.readLine();
-            if (firstHeader == null) {
-                return null;
-            }
-
+            String firstHeader = reader.readLine();
+            if (firstHeader == null) return null;
             HttpRequest request = new HttpRequest(firstHeader);
-
             String line;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
                 Integer parsedLength = extractContentLength(line);
-                if (parsedLength != null) {
-                    request.setContentLength(parsedLength);
-                }
-
+                if (parsedLength != null) request.setContentLength(parsedLength);
                 headersBuilder.append(line).append("\r\n");
             }
-
             request.setHeaders(headersBuilder.toString());
             if (request.getContentLength() > 0) {
                 int totalRead = 0;
                 char[] body = new char[request.getContentLength()];
-
                 while (totalRead < request.getContentLength()) {
                     int read = reader.read(body, totalRead, request.getContentLength() - totalRead);
-                    if (read == -1) {
-                        break;
-                    }
+                    if (read == -1) break;
                     totalRead += read;
                 }
-
-                if (totalRead < request.getContentLength()) {
-                    return null;
-                }
-
+                if (totalRead < request.getContentLength()) return null;
                 request.setBody(body);
             }
-
             return request;
-        } catch (IOException e) {
-            e.printStackTrace();
-            return null;
-        }
+        } catch (IOException e) { return null; }
     }
 
     private Integer extractContentLength(String line) {
-        if (line == null) {
-            return null;
-        }
-
+        if (line == null) return null;
         int sep = line.indexOf(':');
-        if (sep <= 0) {
-            return null;
-        }
-
+        if (sep <= 0) return null;
         String name = line.substring(0, sep).trim();
-        if (!"Content-Length".equalsIgnoreCase(name)) {
-            return null;
-        }
-
+        if (!"Content-Length".equalsIgnoreCase(name)) return null;
         String value = line.substring(sep + 1).trim();
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        try { return Integer.parseInt(value); } catch (NumberFormatException e) { return null; }
     }
 }

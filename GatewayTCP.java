@@ -1,8 +1,7 @@
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
+import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -25,11 +24,7 @@ public class GatewayTCP {
     private static final int GATEWAY_PORT = 9001;
     private static final int CLEANUP_INTERVAL_SECONDS = 5;
     private static final int HEARTBEAT_BACKLOG = 200;
-    private static final int GATEWAY_BACKLOG = 1500;
-    private static final int HEARTBEAT_READ_TIMEOUT_MS = 2000;
-    private static final int CLIENT_READ_TIMEOUT_MS = 10000;
-    private static final int SERVICE_CONNECT_TIMEOUT_MS = 2000;
-    private static final int SERVICE_READ_TIMEOUT_MS = 10000;
+    private static final int GATEWAY_BACKLOG = 3000;
 
     private static final ConcurrentHashMap<String, InstanceInfo> isEmailServices = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, InstanceInfo> isPasswordServices = new ConcurrentHashMap<>();
@@ -70,7 +65,6 @@ public class GatewayTCP {
 
     private void handleHeartbeat(Socket socket) {
         try (socket) {
-            socket.setSoTimeout(HEARTBEAT_READ_TIMEOUT_MS);
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             HttpRequest request = readHttpRequest(reader);
@@ -98,7 +92,6 @@ public class GatewayTCP {
 
     private void handleClientConnection(Socket socket) {
         try (socket) {
-            socket.setSoTimeout(CLIENT_READ_TIMEOUT_MS);
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             HttpRequest request = readHttpRequest(reader);
@@ -130,26 +123,23 @@ public class GatewayTCP {
 
             HTTPResponse response = forwardToService(request, target);
             if (response == null) {
-                writeResponse(socket, buildSimpleResponse(503, "Servico indisponivel"));
+                writeResponse(socket, buildSimpleResponse(503, "Servico indisponivel no worker"));
                 return;
             }
 
             writeResponse(socket, response);
         } catch (Exception e) {
             System.err.println("Erro processando conexao TCP: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
     private HTTPResponse forwardToService(HttpRequest request, InstanceInfo target) {
-        try (Socket serviceSocket = new Socket()) {
-            serviceSocket.connect(
-                new InetSocketAddress(target.getHost(), target.getPort()),
-                SERVICE_CONNECT_TIMEOUT_MS);
-            serviceSocket.setSoTimeout(SERVICE_READ_TIMEOUT_MS);
-            OutputStream output = serviceSocket.getOutputStream();
-            byte[] data = request.toString().getBytes(StandardCharsets.UTF_8);
-            output.write(data);
-            output.flush();
+        try (Socket serviceSocket = new Socket(target.getHost(), target.getPort())) {
+            
+            PrintWriter gatewayRequest = new PrintWriter(serviceSocket.getOutputStream(), true);
+            gatewayRequest.print(request.toString());
+            gatewayRequest.flush();
 
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(serviceSocket.getInputStream(), StandardCharsets.UTF_8));
@@ -161,10 +151,9 @@ public class GatewayTCP {
     }
 
     private void writeResponse(Socket socket, HTTPResponse response) throws IOException {
-        OutputStream output = socket.getOutputStream();
-        byte[] data = response.toString().getBytes(StandardCharsets.UTF_8);
-        output.write(data);
-        output.flush();
+        PrintWriter gatewayResponse = new PrintWriter(socket.getOutputStream(), true);
+        gatewayResponse.print(response.toString());
+        gatewayResponse.flush();
     }
 
     private HTTPResponse buildSimpleResponse(int statusCode, String body) {
@@ -177,7 +166,6 @@ public class GatewayTCP {
 
         response.setHeader("Content-Type: text/plain; charset=utf-8");
         response.setHeader("Content-Length: " + length);
-        response.setHeader("Connection: close");
         response.setContentLength(length);
         response.setBody(safeBody);
         return response;
@@ -190,7 +178,7 @@ public class GatewayTCP {
 
         String[] tokens = body.trim().split(":");
         if (tokens.length < 3) {
-            System.err.println("Heartbeat invalido: " + body);
+            System.err.println("Heartbeat invalido (Tamanho incoreto): " + body);
             return;
         }
 
@@ -282,9 +270,8 @@ public class GatewayTCP {
 
             String line;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                Integer parsedLength = extractContentLength(line);
-                if (parsedLength != null) {
-                    request.setContentLength(parsedLength);
+                if (line.startsWith("Content-Length:")) {
+                    request.setContentLength(line);
                 }
 
                 headersBuilder.append(line).append("\r\n");
@@ -302,10 +289,6 @@ public class GatewayTCP {
                         break;
                     }
                     totalRead += read;
-                }
-
-                if (totalRead < request.getContentLength()) {
-                    return null;
                 }
 
                 request.setBody(body);
@@ -332,9 +315,8 @@ public class GatewayTCP {
 
             String line;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
-                Integer parsedLength = extractContentLength(line);
-                if (parsedLength != null) {
-                    response.setContentLength(parsedLength);
+                if (line.startsWith("Content-Length:")) {
+                    response.setContentLength(line);
                 }
 
                 headersBuilder.append(line).append("\r\n");
@@ -353,10 +335,6 @@ public class GatewayTCP {
                     totalRead += read;
                 }
 
-                if (totalRead < response.getContentLength()) {
-                    return null;
-                }
-
                 response.setBody(body);
             }
 
@@ -367,32 +345,10 @@ public class GatewayTCP {
         }
     }
 
-    private Integer extractContentLength(String line) {
-        if (line == null) {
-            return null;
-        }
-
-        int sep = line.indexOf(':');
-        if (sep <= 0) {
-            return null;
-        }
-
-        String name = line.substring(0, sep).trim();
-        if (!"Content-Length".equalsIgnoreCase(name)) {
-            return null;
-        }
-
-        String value = line.substring(sep + 1).trim();
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
     public static void main(String[] args) {
         try {
             GatewayTCP gateway = new GatewayTCP();
+            System.out.println("GatewayTCP iniciado com sucesso. Escutando portas " + GATEWAY_PORT + " e " + HEARTBEAT_PORT);
             gateway.start();
         } catch (Exception e) {
             e.printStackTrace();
