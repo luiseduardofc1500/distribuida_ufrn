@@ -1,158 +1,145 @@
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.StringReader;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import message.HTTPResponse;
+import message.HTTPUtils;
+import message.HttpRequest;
+
 public class GatewayUDP {
 
-    private static final int GATEWAY_PORT = 9000;
-    private static final long TIMEOUT = 15000;
+    private static final int HEARTBEAT_PORT = 9000;
+    private static final int GATEWAY_PORT = 9001;
+    private static final int CLEANUP_INTERVAL_SECONDS = 5;
 
-    private static final Map<ComponentType, List<InstanceInfo>> registry = new ConcurrentHashMap<>();
-    private static final Map<ComponentType, AtomicInteger> roundRobinIndex = new ConcurrentHashMap<>();
-    private static final Map<String, PendingRequest> pendingRequests = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, InstanceInfo> isEmailServices = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, InstanceInfo> isPasswordServices = new ConcurrentHashMap<>();
 
-    private static final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private static final AtomicInteger isEmailIndex = new AtomicInteger(0);
+    private static final AtomicInteger isPasswordIndex = new AtomicInteger(0);
+
+    private static final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
 
-    private static DatagramSocket socket;
+    private DatagramSocket socketHeartbeat;
+    private DatagramSocket socketGateway;
 
-    static class PendingRequest {
-        ClientInfo client;
-        long timestamp;
-
-        PendingRequest(ClientInfo client, long timestamp) {
-            this.client = client;
-            this.timestamp = timestamp;
+    public void start() {
+        try {
+            socketHeartbeat = new DatagramSocket(HEARTBEAT_PORT);
+            socketGateway = new DatagramSocket(GATEWAY_PORT);
+        } catch (SocketException e) {
+            e.printStackTrace();
+            return;
         }
-    }
-
-    public static void main(String[] args) throws Exception {
-        socket = new DatagramSocket(GATEWAY_PORT);
-        System.out.println("Gateway rodando na porta " + GATEWAY_PORT);
 
         startCleanup();
+        executor.submit(this::listenHeartBeat);
+        server();
+    }
 
+    private void listenHeartBeat() {
         while (true) {
-            byte[] buf = new byte[4096];
-            DatagramPacket packet = new DatagramPacket(buf, buf.length);
-            socket.receive(packet);
-
-            pool.submit(() -> handle(packet));
-        }
-    }
-
-    private static void handle(DatagramPacket packet) {
-        try {
-            String json = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
-            Message msg = Message.fromHttpFormat(json);
-
-            if (msg.type() == MessageType.UNKNOWN) {
-                sendBadRequest(packet, msg.requestId() != null ? msg.requestId() : "unknown", System.currentTimeMillis());
-                return;
-            }
-
-            switch (msg.type()) {
-                case REGISTER, HEARTBEAT -> handleManagement(msg, packet);
-                case GET, POST-> handleRequest(msg, packet);
-                case RESPONSE, ERROR -> handleResponse(msg);
-            }
-
-        } catch (Exception e) {
-            System.err.println("Erro processando pacote: " + e.getMessage());
             try {
-                sendBadRequest(packet, "unknown", System.currentTimeMillis());
-            } catch (Exception sendEx) {
-                System.err.println("Erro ao tentar enviar BAD_REQUEST: " + sendEx.getMessage());
-            }
-        }
-    }
+                byte[] serverMessage = new byte[2048];
+                DatagramPacket serverPacket = new DatagramPacket(serverMessage, serverMessage.length);
+                socketHeartbeat.receive(serverPacket);
 
-    
-    private static void handleManagement(Message msg, DatagramPacket packet) {
-        long now = System.currentTimeMillis();
-        ComponentType component = msg.componentType();
-        String id = msg.instanceId();
-        String host = msg.host();
-        int port = msg.port();
-        String identity = id + "|" + host + "|" + port;
+                String message = new String(serverPacket.getData(), 0, serverPacket.getLength(), StandardCharsets.UTF_8);
+                BufferedReader messageReader = new BufferedReader(new StringReader(message));
+                HttpRequest request = getHTTPRequest(messageReader);
 
-        List<InstanceInfo> list = registry.computeIfAbsent(component, key -> new CopyOnWriteArrayList<>());
-
-        InstanceInfo existing = list.stream().filter(instance ->  instance.getIdentity()
-                                                            .equals(identity))
-                                                            .findFirst()
-                                                            .orElse(null);
-
-        if (existing == null) {
-            System.out.println("[NEW_INSTANCE] Adicionando: " + identity + " (" + component + ")");
-            list.add(new InstanceInfo(id, host, port, now));
-            roundRobinIndex.putIfAbsent(component, new AtomicInteger(0));
-        } else {
-            existing.setLastSeen(now);
-            if (msg.type() == MessageType.HEARTBEAT) {
-                System.out.println("[HEARTBEAT] Recebido pulso de vida de " + identity + " (" + component + ")");
-            } else {
-                System.out.println("[REGISTER] Atualizando registro de: " + identity + " (" + component + ")");
-            }
-        }
-
-        if (msg.type() == MessageType.REGISTER) {
-            try {
-                Message successResponse = new Message(MessageType.RESPONSE, component, id, "localhost", GATEWAY_PORT, "REGISTER", "OK", String.valueOf(now));
-                byte[] data = successResponse.toHttpFormat().getBytes(StandardCharsets.UTF_8);
-                socket.send(new DatagramPacket(data, data.length, packet.getAddress(), packet.getPort()));
+                if (request != null) {
+                    updateService(request.getBody());
+                }
+            } catch (IOException e) {
+                System.err.println("Erro ao processar heartbeat: " + e.getMessage());
             } catch (Exception e) {
-                System.err.println("Erro ao enviar resposta de sucesso: " + e.getMessage());
+                System.err.println("Erro inesperado no heartbeat: " + e.getMessage());
             }
         }
     }
 
-    private static void handleRequest(Message msg, DatagramPacket packet) throws Exception {
-        long now = System.currentTimeMillis();
-        ComponentType component = msg.componentType();
+    private void server() {
+        try {
+            while (true) {
+                byte[] clientMessage = new byte[4096];
+                DatagramPacket clientPacket = new DatagramPacket(clientMessage, clientMessage.length);
+                socketGateway.receive(clientPacket);
 
-        List<InstanceInfo> list = registry.get(component);
+                DatagramPacket packetCopy = new DatagramPacket(
+                        clientPacket.getData().clone(),
+                        clientPacket.getLength(),
+                        clientPacket.getAddress(),
+                        clientPacket.getPort()
+                );
 
-        if (list == null || list.isEmpty()) {
-            sendError(packet, msg.requestId(), now);
+                executor.execute(() -> handleGatewayPacket(packetCopy));
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void handleGatewayPacket(DatagramPacket packet) {
+        try {
+            String message = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+            BufferedReader messageReader = new BufferedReader(new StringReader(message));
+
+            if (message.startsWith("HTTP/")) {
+                HTTPResponse response = getHTTPResponse(messageReader);
+                if (response != null) {
+                    sendResponseToClient(response);
+                }
+            } else {
+                HttpRequest request = getHTTPRequest(messageReader);
+                if (request == null) {
+                    sendErrorToClient(packet, 400, "Bad Request");
+                    return;
+                }
+                handleClientRequest(request, packet);
+            }
+        } catch (Exception e) {
+            System.err.println("Erro processando pacote do gateway: " + e.getMessage());
+        }
+    }
+
+    private void handleClientRequest(HttpRequest request, DatagramPacket packet) throws IOException {
+        request.setHeader("X-Client-IP: " + packet.getAddress().getHostAddress());
+        request.setHeader("X-Client-Port: " + packet.getPort());
+
+        String path = request.getPath();
+        InstanceInfo target;
+
+        if ("/isemail".equalsIgnoreCase(path)) {
+            target = getNextService(isEmailServices, isEmailIndex);
+        } else if ("/ispassword".equalsIgnoreCase(path)) {
+            target = getNextService(isPasswordServices, isPasswordIndex);
+        } else {
+            sendErrorToClient(packet, 404, "Not Found");
             return;
         }
 
-        List<InstanceInfo> alive = list.stream()
-                .filter(instance -> instance.isAlive(now))
-                .toList();
-
-        if (alive.isEmpty()) {
-            sendError(packet, msg.requestId(), now);
+        if (target == null) {
+            sendErrorToClient(packet, 503, "Servico indisponivel");
             return;
         }
 
-        AtomicInteger index = roundRobinIndex.get(component);
-        int currentIndex = index.getAndIncrement();
-
-        InstanceInfo target = alive.get(Math.abs(currentIndex) % alive.size());
-
-        System.out.println("[FORWARD] " + msg.requestId() + " -> " + target.getIdentity());
-
-        pendingRequests.put(msg.requestId(),
-                new PendingRequest(
-                        new ClientInfo(packet.getAddress().getHostAddress(), packet.getPort()),
-                        now
-                ));
-
-        byte[] data = msg.toHttpFormat().getBytes(StandardCharsets.UTF_8);
-
-        socket.send(new DatagramPacket(
+        byte[] data = request.toString().getBytes(StandardCharsets.UTF_8);
+        socketGateway.send(new DatagramPacket(
                 data,
                 data.length,
                 InetAddress.getByName(target.getHost()),
@@ -160,82 +147,237 @@ public class GatewayUDP {
         ));
     }
 
- 
-    private static void handleResponse(Message msg) throws Exception {
-        PendingRequest pendingReq = pendingRequests.remove(msg.requestId());
+    private void sendResponseToClient(HTTPResponse response) throws IOException {
+        String ip = response.getHeader("X-Client-IP");
+        String portValue = response.getHeader("X-Client-Port");
 
-        if (pendingReq == null) return;
+        if (ip == null || portValue == null) {
+            System.err.println("Resposta sem cabecalhos X-Client.");
+            return;
+        }
 
-        byte[] data = msg.toHttpFormat().getBytes(StandardCharsets.UTF_8);
+        if (ip.startsWith("/")) {
+            ip = ip.substring(1);
+        }
 
-        socket.send(new DatagramPacket(
+        int port;
+        try {
+            port = Integer.parseInt(portValue);
+        } catch (NumberFormatException e) {
+            System.err.println("Porta invalida na resposta: " + portValue);
+            return;
+        }
+
+        byte[] data = response.toString().getBytes(StandardCharsets.UTF_8);
+        socketGateway.send(new DatagramPacket(
                 data,
                 data.length,
-                InetAddress.getByName(pendingReq.client.getHost()),
-                pendingReq.client.getPort()
+                InetAddress.getByName(ip),
+                port
         ));
     }
 
-    private static void startCleanup() {
+    private void sendErrorToClient(DatagramPacket packet, int statusCode, String body) {
+        try {
+            HTTPResponse response = buildSimpleResponse(statusCode, body);
+            byte[] data = response.toString().getBytes(StandardCharsets.UTF_8);
+            socketGateway.send(new DatagramPacket(
+                    data,
+                    data.length,
+                    packet.getAddress(),
+                    packet.getPort()
+            ));
+        } catch (IOException e) {
+            System.err.println("Erro ao enviar erro para cliente: " + e.getMessage());
+        }
+    }
+
+    private HTTPResponse buildSimpleResponse(int statusCode, String body) {
+        String protocol = "HTTP/1.1";
+        String status = HTTPUtils.mapStatus(statusCode);
+        HTTPResponse response = new HTTPResponse(protocol, statusCode, status);
+
+        String safeBody = body == null ? "" : body;
+        int length = safeBody.getBytes(StandardCharsets.UTF_8).length;
+
+        response.setHeader("Content-Type: text/plain; charset=utf-8");
+        response.setHeader("Content-Length: " + length);
+        response.setContentLength(length);
+        response.setBody(safeBody);
+        return response;
+    }
+
+    private void updateService(String body) {
+        if (body == null || body.isEmpty()) {
+            return;
+        }
+
+        String[] tokens = body.trim().split(":");
+        if (tokens.length < 3) {
+            System.err.println("Heartbeat invalido: " + body);
+            return;
+        }
+
+        String serviceType = tokens[0].trim().toLowerCase();
+        String host = tokens[1].trim();
+        String portValue = tokens[2].trim();
+
+        int port;
+        try {
+            port = Integer.parseInt(portValue);
+        } catch (NumberFormatException e) {
+            System.err.println("Porta invalida no heartbeat: " + portValue);
+            return;
+        }
+
+        ConcurrentHashMap<String, InstanceInfo> map;
+        if ("isemail".equals(serviceType)) {
+            map = isEmailServices;
+        } else if ("ispassword".equals(serviceType)) {
+            map = isPasswordServices;
+        } else {
+            System.err.println("Servico desconhecido no heartbeat: " + serviceType);
+            return;
+        }
+
+        String identity = host + ":" + port;
+        long now = System.currentTimeMillis();
+        InstanceInfo existing = map.get(identity);
+
+        if (existing == null) {
+            map.put(identity, new InstanceInfo(identity, host, port, now));
+            System.out.println("[NEW_INSTANCE] " + serviceType + " -> " + identity);
+        } else {
+            existing.setLastSeen(now);
+        }
+    }
+
+    private InstanceInfo getNextService(ConcurrentHashMap<String, InstanceInfo> serviceHashMap, AtomicInteger index) {
+        long now = System.currentTimeMillis();
+        List<InstanceInfo> servicesOnline = new ArrayList<>();
+
+        for (InstanceInfo instancia : serviceHashMap.values()) {
+            if (instancia.isAlive(now)) {
+                servicesOnline.add(instancia);
+            }
+        }
+
+        if (servicesOnline.isEmpty()) {
+            return null;
+        }
+
+        int i = index.getAndUpdate(v -> (v + 1) % servicesOnline.size());
+        if (i < 0) {
+            i = (i % servicesOnline.size()) + servicesOnline.size();
+        }
+
+        return servicesOnline.get(i % servicesOnline.size());
+    }
+
+    private void startCleanup() {
         scheduler.scheduleAtFixedRate(() -> {
             long now = System.currentTimeMillis();
+            cleanupMap(isEmailServices, "isEmail", now);
+            cleanupMap(isPasswordServices, "isPassword", now);
+        }, CLEANUP_INTERVAL_SECONDS, CLEANUP_INTERVAL_SECONDS, TimeUnit.SECONDS);
+    }
 
-            registry.forEach((component, list) -> {
-                list.removeIf(instance -> {
-                    boolean expired = (now - instance.getLastSeen() > TIMEOUT);
-                    if (expired) {
-                        System.out.println("[TIMEOUT] Instancia removida por inatividade: " + instance.getIdentity() + " (" + component + ")");
+    private void cleanupMap(ConcurrentHashMap<String, InstanceInfo> map, String label, long now) {
+        map.values().removeIf(instance -> {
+            boolean expired = !instance.isAlive(now);
+            if (expired) {
+                System.out.println("[TIMEOUT] Removendo instancia " + label + ": " + instance.getIdentity());
+            }
+            return expired;
+        });
+    }
+
+    private HttpRequest getHTTPRequest(BufferedReader clientRequest) {
+        StringBuilder headersBuilder = new StringBuilder();
+        String firstHeader;
+
+        try {
+            firstHeader = clientRequest.readLine();
+            if (firstHeader == null) {
+                return null;
+            }
+
+            HttpRequest request = new HttpRequest(firstHeader);
+
+            String line;
+            while ((line = clientRequest.readLine()) != null && !line.isEmpty()) {
+                if (line.startsWith("Content-Length:")) {
+                    request.setContentLength(line);
+                }
+
+                headersBuilder.append(line).append("\r\n");
+            }
+
+            request.setHeaders(headersBuilder.toString());
+
+            if (request.getContentLength() > 0) {
+                int totalRead = 0;
+                char[] body = new char[request.getContentLength()];
+
+                while (totalRead < request.getContentLength()) {
+                    int read = clientRequest.read(body, totalRead, request.getContentLength() - totalRead);
+                    if (read == -1) {
+                        break;
                     }
-                    return expired;
-                });
-            });
+                    totalRead += read;
+                }
 
-            pendingRequests.values().removeIf(pendingReq -> now - pendingReq.timestamp > 10000);
+                request.setBody(body);
+            }
 
-        }, 5, 5, TimeUnit.SECONDS);
+            return request;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
+        }
     }
 
-    private static void sendError(DatagramPacket packet, String requestId, long now) throws Exception {
-        Message error = new Message(
-                MessageType.ERROR,
-                ComponentType.GATEWAY,
-                "GATEWAY",
-                "localhost",
-                GATEWAY_PORT,
-                requestId,
-                "NO_INSTANCE",
-                String.valueOf(now)
-        );
+    private HTTPResponse getHTTPResponse(BufferedReader serverResponse) {
+        StringBuilder headersBuilder = new StringBuilder();
+        String firstHeader;
 
-        byte[] data = error.toHttpFormat().getBytes(StandardCharsets.UTF_8);
+        try {
+            firstHeader = serverResponse.readLine();
+            if (firstHeader == null) {
+                return null;
+            }
 
-        socket.send(new DatagramPacket(
-                data,
-                data.length,
-                packet.getAddress(),
-                packet.getPort()
-        ));
+            HTTPResponse response = new HTTPResponse(firstHeader);
+
+            String line;
+            while ((line = serverResponse.readLine()) != null && !line.isEmpty()) {
+                if (line.startsWith("Content-Length:")) {
+                    response.setContentLength(line);
+                }
+
+                headersBuilder.append(line).append("\r\n");
+            }
+
+            response.setHeaders(headersBuilder.toString());
+            if (response.getContentLength() > 0) {
+                char[] body = new char[response.getContentLength()];
+                serverResponse.read(body, 0, response.getContentLength());
+                response.setBody(body);
+            }
+
+            return response;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
+        }
     }
 
-    private static void sendBadRequest(DatagramPacket packet, String requestId, long now) throws Exception {
-        Message error = new Message(
-                MessageType.ERROR,
-                ComponentType.GATEWAY,
-                "GATEWAY",
-                "localhost",
-                GATEWAY_PORT,
-                requestId,
-                "BAD_REQUEST",
-                String.valueOf(now)
-        );
-
-        byte[] data = error.toHttpFormat().getBytes(StandardCharsets.UTF_8);
-
-        socket.send(new DatagramPacket(
-                data,
-                data.length,
-                packet.getAddress(),
-                packet.getPort()
-        ));
+    public static void main(String[] args) {
+        try {
+            GatewayUDP gateway = new GatewayUDP();
+            gateway.start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

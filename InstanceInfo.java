@@ -1,4 +1,5 @@
 public class InstanceInfo{
+    private static final long HEARTBEAT_TIMEOUT_MS = 6000;
     String instanceId;
     String host;
     int port;
@@ -37,7 +38,7 @@ public class InstanceInfo{
     }
 
     public boolean isAlive(long now) {
-        return now - lastSeen <= 15000;
+        return now - lastSeen <= HEARTBEAT_TIMEOUT_MS;
     }   
 
     
