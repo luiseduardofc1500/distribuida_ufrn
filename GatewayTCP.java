@@ -34,8 +34,9 @@ public class GatewayTCP {
     private static final ConcurrentHashMap<String, InstanceInfo> isEmailServices = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, InstanceInfo> isPasswordServices = new ConcurrentHashMap<>();
 
-    private static final AtomicInteger isEmailIndex = new AtomicInteger(0);
+    private static final AtomicInteger isEmailIndex    = new AtomicInteger(0);
     private static final AtomicInteger isPasswordIndex = new AtomicInteger(0);
+    private static final AtomicInteger generalIndex    = new AtomicInteger(0);
 
     private static final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
@@ -118,6 +119,8 @@ public class GatewayTCP {
                 target = roundRobin(isEmailServices, isEmailIndex);
             } else if ("/ispassword".equalsIgnoreCase(path)) {
                 target = roundRobin(isPasswordServices, isPasswordIndex);
+            } else if ("/echo".equalsIgnoreCase(path) || path.toLowerCase().startsWith("/validate/")) {
+                target = getAnyAvailableInstance();
             } else {
                 writeResponse(socket, buildSimpleResponse(404, "Not Found"));
                 return;
@@ -248,6 +251,20 @@ public class GatewayTCP {
         }
 
         return servicesOnline.get(i % servicesOnline.size());
+    }
+
+    private InstanceInfo getAnyAvailableInstance() {
+        long now = System.currentTimeMillis();
+        List<InstanceInfo> all = new ArrayList<>();
+        for (InstanceInfo i : isEmailServices.values()) {
+            if (i.isAlive(now)) all.add(i);
+        }
+        for (InstanceInfo i : isPasswordServices.values()) {
+            if (i.isAlive(now)) all.add(i);
+        }
+        if (all.isEmpty()) return null;
+        int i = generalIndex.getAndUpdate(v -> (v + 1) % all.size());
+        return all.get(i % all.size());
     }
 
     private void startCleanup() {
