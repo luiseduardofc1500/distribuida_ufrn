@@ -137,6 +137,7 @@ public class GatewayTCP {
                 return;
             }
 
+            response.setHeader("X-Gateway-Target: " + target.getHost() + ":" + target.getPort());
             writeResponse(socket, response);
         } catch (Exception e) {
             System.err.println("Erro processando conexao TCP: " + e.getMessage());
