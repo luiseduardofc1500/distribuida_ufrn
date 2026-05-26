@@ -7,7 +7,9 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -31,8 +33,8 @@ public class GatewayTCP {
     private static final int SERVICE_CONNECT_TIMEOUT_MS = 2000;
     private static final int SERVICE_READ_TIMEOUT_MS = 10000;
 
-    private static final ConcurrentHashMap<String, InstanceInfo> isEmailServices = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, InstanceInfo> isPasswordServices = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, ConcurrentHashMap<String, InstanceInfo>> servicesByType =
+            new ConcurrentHashMap<>();
 
     private static final AtomicInteger isEmailIndex    = new AtomicInteger(0);
     private static final AtomicInteger isPasswordIndex = new AtomicInteger(0);
@@ -112,24 +114,13 @@ public class GatewayTCP {
             request.setHeader("X-Client-IP: " + socket.getInetAddress().getHostAddress());
             request.setHeader("X-Client-Port: " + socket.getPort());
 
-            String path = request.getPath();
-            InstanceInfo target;
-
-            if ("/isemail".equalsIgnoreCase(path)) {
-                target = roundRobin(isEmailServices, isEmailIndex);
-            } else if ("/ispassword".equalsIgnoreCase(path)) {
-                target = roundRobin(isPasswordServices, isPasswordIndex);
-            } else if ("/echo".equalsIgnoreCase(path)
-                    || path.toLowerCase().startsWith("/validate/")
-                    || path.toLowerCase().startsWith("/demo/")) {
-                target = getAnyAvailableInstance();
-            } else {
-                writeResponse(socket, buildSimpleResponse(404, "Not Found"));
-                return;
-            }
+            InstanceInfo target = resolveTarget(request);
 
             if (target == null) {
-                writeResponse(socket, buildSimpleResponse(503, "Servico indisponivel"));
+                int status = hasRegisteredEndpoint(request.getMethod(), request.getPath())
+                        || isPreferredValidationPath(request.getPath()) ? 503 : 404;
+                writeResponse(socket, buildSimpleResponse(status,
+                        status == 503 ? "Servico indisponivel" : "Not Found"));
                 return;
             }
 
@@ -194,7 +185,12 @@ public class GatewayTCP {
             return;
         }
 
-        String[] tokens = body.trim().split(":");
+        String[] lines = body.trim().split("\\R");
+        if (lines.length == 0) {
+            return;
+        }
+
+        String[] tokens = lines[0].split(":", 3);
         if (tokens.length < 3) {
             System.err.println("Heartbeat invalido: " + body);
             return;
@@ -212,38 +208,86 @@ public class GatewayTCP {
             return;
         }
 
-        ConcurrentHashMap<String, InstanceInfo> map;
-        if ("isemail".equals(serviceType)) {
-            map = isEmailServices;
-        } else if ("ispassword".equals(serviceType)) {
-            map = isPasswordServices;
-        } else {
-            System.err.println("Servico desconhecido no heartbeat: " + serviceType);
-            return;
-        }
+        Set<InstanceInfo.EndpointInfo> endpoints = parseEndpoints(lines, serviceType);
+        ConcurrentHashMap<String, InstanceInfo> map = servicesByType.computeIfAbsent(
+                serviceType, ignored -> new ConcurrentHashMap<>());
 
         String identity = host + ":" + port;
         long now = System.currentTimeMillis();
         InstanceInfo existing = map.get(identity);
 
         if (existing == null) {
-            map.put(identity, new InstanceInfo(identity, host, port, now));
-            System.out.println("[NEW_INSTANCE] " + serviceType + " -> " + identity);
+            InstanceInfo instance = new InstanceInfo(identity, host, port, now);
+            instance.setEndpoints(endpoints);
+            map.put(identity, instance);
+            System.out.println("[NEW_INSTANCE] " + serviceType + " -> " + identity
+                    + " endpoints=" + endpoints);
         } else {
             existing.setLastSeen(now);
+            existing.setEndpoints(endpoints);
         }
     }
 
-    private InstanceInfo roundRobin(ConcurrentHashMap<String, InstanceInfo> serviceHashMap, AtomicInteger index) {
+    private Set<InstanceInfo.EndpointInfo> parseEndpoints(String[] lines, String serviceType) {
+        Set<InstanceInfo.EndpointInfo> endpoints = new HashSet<>();
+        for (int i = 1; i < lines.length; i++) {
+            String line = lines[i].trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+
+            String[] parts = line.split("\\s+", 2);
+            if (parts.length == 2) {
+                endpoints.add(new InstanceInfo.EndpointInfo(parts[0], parts[1]));
+            }
+        }
+
+        if (endpoints.isEmpty()) {
+            if ("isemail".equals(serviceType)) {
+                endpoints.add(new InstanceInfo.EndpointInfo("POST", "/isemail"));
+            } else if ("ispassword".equals(serviceType)) {
+                endpoints.add(new InstanceInfo.EndpointInfo("POST", "/ispassword"));
+            }
+        }
+        return endpoints;
+    }
+
+    private InstanceInfo resolveTarget(HttpRequest request) {
+        String method = request.getMethod();
+        String path = request.getPath();
+
+        if ("/isemail".equalsIgnoreCase(path)) {
+            InstanceInfo target = roundRobinSupporting(
+                    servicesByType.get("isemail"), isEmailIndex, method, path);
+            if (target != null) return target;
+        } else if ("/ispassword".equalsIgnoreCase(path)) {
+            InstanceInfo target = roundRobinSupporting(
+                    servicesByType.get("ispassword"), isPasswordIndex, method, path);
+            if (target != null) return target;
+        }
+
+        return roundRobin(getAvailableInstancesSupporting(method, path), generalIndex);
+    }
+
+    private InstanceInfo roundRobinSupporting(ConcurrentHashMap<String, InstanceInfo> serviceHashMap,
+                                             AtomicInteger index, String method, String path) {
+        if (serviceHashMap == null) {
+            return null;
+        }
+
         long now = System.currentTimeMillis();
         List<InstanceInfo> servicesOnline = new ArrayList<>();
 
         for (InstanceInfo instancia : serviceHashMap.values()) {
-            if (instancia.isAlive(now)) {
+            if (instancia.isAlive(now) && instancia.supports(method, path)) {
                 servicesOnline.add(instancia);
             }
         }
 
+        return roundRobin(servicesOnline, index);
+    }
+
+    private InstanceInfo roundRobin(List<InstanceInfo> servicesOnline, AtomicInteger index) {
         if (servicesOnline.isEmpty()) {
             return null;
         }
@@ -256,25 +300,41 @@ public class GatewayTCP {
         return servicesOnline.get(i % servicesOnline.size());
     }
 
-    private InstanceInfo getAnyAvailableInstance() {
+    private List<InstanceInfo> getAvailableInstancesSupporting(String method, String path) {
         long now = System.currentTimeMillis();
-        List<InstanceInfo> all = new ArrayList<>();
-        for (InstanceInfo i : isEmailServices.values()) {
-            if (i.isAlive(now)) all.add(i);
+        List<InstanceInfo> matching = new ArrayList<>();
+
+        for (ConcurrentHashMap<String, InstanceInfo> serviceMap : servicesByType.values()) {
+            for (InstanceInfo instance : serviceMap.values()) {
+                if (instance.isAlive(now) && instance.supports(method, path)) {
+                    matching.add(instance);
+                }
+            }
         }
-        for (InstanceInfo i : isPasswordServices.values()) {
-            if (i.isAlive(now)) all.add(i);
+        return matching;
+    }
+
+    private boolean hasRegisteredEndpoint(String method, String path) {
+        for (ConcurrentHashMap<String, InstanceInfo> serviceMap : servicesByType.values()) {
+            for (InstanceInfo instance : serviceMap.values()) {
+                if (instance.supports(method, path)) {
+                    return true;
+                }
+            }
         }
-        if (all.isEmpty()) return null;
-        int i = generalIndex.getAndUpdate(v -> (v + 1) % all.size());
-        return all.get(i % all.size());
+        return false;
+    }
+
+    private boolean isPreferredValidationPath(String path) {
+        return "/isemail".equalsIgnoreCase(path) || "/ispassword".equalsIgnoreCase(path);
     }
 
     private void startCleanup() {
         scheduler.scheduleAtFixedRate(() -> {
             long now = System.currentTimeMillis();
-            cleanupMap(isEmailServices, "isEmail", now);
-            cleanupMap(isPasswordServices, "isPassword", now);
+            for (String serviceType : servicesByType.keySet()) {
+                cleanupMap(servicesByType.get(serviceType), serviceType, now);
+            }
         }, CLEANUP_INTERVAL_SECONDS, CLEANUP_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 

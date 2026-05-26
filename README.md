@@ -8,6 +8,11 @@
 
 ## Fluxo HTTP com gateway
 
+No protocolo HTTP, cada instância envia heartbeats para o gateway com
+`serviceType`, host, porta e a lista de endpoints descobertos pelo middleware a
+partir de `@Handler`/`@Endpoint`. O gateway usa esses endpoints para rotear pelo
+método e path da requisição, incluindo padrões como `/validate/{type}`.
+
 Em terminais separados:
 
 ```bash
@@ -33,17 +38,18 @@ curl -i -X POST http://localhost:9001/isemail \
 ## Endpoints auxiliares
 
 Os endpoints principais continuam sendo `POST /isemail` e `POST /ispassword`.
-Para demonstrar recursos do middleware, o `UtilHandler` também expõe:
+Para demonstrar recursos do middleware, o `UtilHandler` também expõe endpoints
+que também podem passar pelo gateway na porta `9001`:
 
 ```bash
 # Demonstra @PathParam + @QueryParam
-curl -i "http://localhost:9101/validate/email?value=teste@ufrn.br" \
+curl -i "http://localhost:9001/validate/email?value=teste@ufrn.br" \
   -H "Authorization: Bearer segredo123"
 ```
 
 ```bash
 # Demonstra @BodyParam + @HeaderParam
-curl -i -X POST http://localhost:9101/echo \
+curl -i -X POST http://localhost:9001/echo \
   -H "Authorization: Bearer segredo123" \
   -H "X-Transform: upper" \
   --data "texto de exemplo"
@@ -51,7 +57,7 @@ curl -i -X POST http://localhost:9101/echo \
 
 ```bash
 # Demonstra @InstancePolicy(LifecyclePolicy.PER_REQUEST)
-curl -i http://localhost:9101/demo/instance \
+curl -i http://localhost:9001/demo/instance \
   -H "Authorization: Bearer segredo123"
 ```
 

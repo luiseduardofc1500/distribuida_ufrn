@@ -1,9 +1,12 @@
 package br.ufrn.distribuida;
 
+import br.ufrn.imd.middleware.broker.invoker.RequestDispatcher;
+
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public class HeartbeatService implements Runnable {
 
@@ -13,6 +16,7 @@ public class HeartbeatService implements Runnable {
     private final String gatewayHost;
     private final int    gatewayHeartbeatPort;
     private final int    intervalMs;
+    private final List<String> endpoints;
 
     public HeartbeatService(AppConfiguration config) {
         this.serviceType          = config.getServiceType();
@@ -21,6 +25,7 @@ public class HeartbeatService implements Runnable {
         this.gatewayHost          = config.getGatewayHost();
         this.gatewayHeartbeatPort = config.getGatewayHeartbeatPort();
         this.intervalMs           = config.getHeartbeatIntervalMs();
+        this.endpoints            = RequestDispatcher.getInstance().getEndpointDefinitions();
     }
 
     @Override
@@ -42,6 +47,9 @@ public class HeartbeatService implements Runnable {
 
     private void sendHeartbeat() throws Exception {
         String body = serviceType + ":" + instanceHost + ":" + instancePort;
+        if (!endpoints.isEmpty()) {
+            body += "\n" + String.join("\n", endpoints);
+        }
         byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
 
         String request =
