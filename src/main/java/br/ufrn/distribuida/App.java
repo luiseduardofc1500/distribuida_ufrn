@@ -12,7 +12,8 @@ import br.ufrn.imd.middleware.configuration.MiddlewareApplication;
  *   mvn exec:java -Dexec.jvmArgs="-Dapp.port=9103 -Dapp.serviceType=isemail -Dapp.instanceId=inst-email-2"
  *
  * Propriedades suportadas:
- *   app.port          – porta TCP que o middleware vai abrir
+ *   app.port          – porta que o middleware vai abrir
+ *   app.protocol      – protocolo usado pela instância (HTTP | UDP)
  *   app.serviceType   – tipo de serviço para registro no gateway (isemail | ispassword)
  *   app.instanceId    – identificador único da instância
  *   app.gatewayHost   – host do gateway (padrão: localhost)
@@ -48,6 +49,9 @@ public class App {
 
         String port = System.getProperty("app.port");
         if (port != null) config.setPort(Integer.parseInt(port));
+
+        String protocol = System.getProperty("app.protocol");
+        if (protocol != null) config.setProtocol(protocol);
 
         String serviceType = System.getProperty("app.serviceType");
         if (serviceType != null) config.setServiceType(serviceType);

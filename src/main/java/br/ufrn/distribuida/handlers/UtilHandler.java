@@ -4,17 +4,31 @@ import br.ufrn.imd.middleware.broker.annotations.BodyParam;
 import br.ufrn.imd.middleware.broker.annotations.Endpoint;
 import br.ufrn.imd.middleware.broker.annotations.Handler;
 import br.ufrn.imd.middleware.broker.annotations.HeaderParam;
+import br.ufrn.imd.middleware.broker.annotations.InstancePolicy;
 import br.ufrn.imd.middleware.broker.annotations.PathParam;
 import br.ufrn.imd.middleware.broker.annotations.QueryParam;
 import br.ufrn.imd.middleware.broker.entities.ResponseWrapper;
 import br.ufrn.imd.middleware.broker.enums.HTTPMethods;
 import br.ufrn.imd.middleware.broker.enums.HTTPStatus;
+import br.ufrn.imd.middleware.broker.enums.LifecyclePolicy;
+
+import java.time.Instant;
+import java.util.UUID;
 
 /**
- * Endpoints extras que demonstram o uso de @PathParam, @QueryParam e @HeaderParam.
+ * Endpoints extras para demonstrar parâmetros e ciclo de vida de handlers.
  */
 @Handler(basePath = "/")
+@InstancePolicy(LifecyclePolicy.PER_REQUEST)
 public class UtilHandler {
+
+    private final String instanceId;
+    private final Instant createdAt;
+
+    public UtilHandler() {
+        this.instanceId = UUID.randomUUID().toString();
+        this.createdAt = Instant.now();
+    }
 
     /**
      * GET /validate/{type}?value=xxx
@@ -45,12 +59,23 @@ public class UtilHandler {
     }
 
     /**
+     * GET /demo/instance
+     *
+     * Demonstra LifecyclePolicy.PER_REQUEST: cada requisição cria um UtilHandler novo.
+     */
+    @Endpoint(method = HTTPMethods.GET, path = "demo/instance")
+    public ResponseWrapper<String> instanceInfo() {
+        return ResponseWrapper.ok(
+                "handler=UtilHandler"
+                        + "; lifecycle=PER_REQUEST"
+                        + "; instanceId=" + instanceId
+                        + "; createdAt=" + createdAt);
+    }
+
+    /**
      * POST /echo
      *
-     * Retorna o corpo da requisição transformado conforme o header X-Transform.
-     * Valores aceitos em X-Transform: upper, lower, reverse (padrão: sem transformação).
-     *
-     * Demonstra: @BodyParam + @HeaderParam
+     * Demonstra: @BodyParam + @HeaderParam("X-Transform")
      */
     @Endpoint(method = HTTPMethods.POST, path = "echo")
     public ResponseWrapper<String> echo(
