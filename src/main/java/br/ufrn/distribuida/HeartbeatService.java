@@ -5,12 +5,6 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
-/**
- * Envia heartbeats periódicos ao gateway para manter a instância
- * registrada no serviço de descoberta.
- *
- * Formato do corpo: serviceType:host:port  (ex: isemail:localhost:9101)
- */
 public class HeartbeatService implements Runnable {
 
     private final String serviceType;

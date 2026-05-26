@@ -29,7 +29,7 @@ public class UtilHandler {
     }
 
 
-    @Endpoint(method = HTTPMethods.GET, path = "validate/{type}")
+        @Endpoint(method = HTTPMethods.GET, path = "validate/{type}")
     public ResponseWrapper<String> validateByType(
             @PathParam("type") String type,
             @QueryParam("value") String value) {

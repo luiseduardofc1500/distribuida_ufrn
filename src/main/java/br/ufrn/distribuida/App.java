@@ -31,7 +31,8 @@ public class App {
         applySystemPropertyOverrides(runner);
 
         if (runner.getConfiguration() instanceof AppConfiguration config
-                && config.getServiceType() != null) {
+                && config.getServiceType() != null
+                && (config.getProtocol() == null || "HTTP".equalsIgnoreCase(config.getProtocol()))) {
 
             Thread heartbeat = Thread.ofVirtual()
                     .name("heartbeat-" + config.getServiceType())
