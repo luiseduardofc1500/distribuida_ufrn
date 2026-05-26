@@ -7,10 +7,6 @@ import br.ufrn.imd.middleware.broker.entities.ResponseWrapper;
 import br.ufrn.imd.middleware.broker.enums.HTTPMethods;
 import br.ufrn.imd.middleware.broker.enums.HTTPStatus;
 
-/**
- * Replica os serviços originais da aplicação (isEmail / isPassword),
- * agora expostos como endpoints do middleware.
- */
 @Handler(basePath = "/")
 public class ValidationHandler {
 

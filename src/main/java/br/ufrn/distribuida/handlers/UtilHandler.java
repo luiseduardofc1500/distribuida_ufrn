@@ -15,9 +15,7 @@ import br.ufrn.imd.middleware.broker.enums.LifecyclePolicy;
 import java.time.Instant;
 import java.util.UUID;
 
-/**
- * Endpoints extras para demonstrar parâmetros e ciclo de vida de handlers.
- */
+
 @Handler(basePath = "/")
 @InstancePolicy(LifecyclePolicy.PER_REQUEST)
 public class UtilHandler {
@@ -30,14 +28,7 @@ public class UtilHandler {
         this.createdAt = Instant.now();
     }
 
-    /**
-     * GET /validate/{type}?value=xxx
-     *
-     * Valida um valor de acordo com o tipo informado na URL.
-     * Tipos suportados: email, password, numeric.
-     *
-     * Demonstra: @PathParam + @QueryParam
-     */
+
     @Endpoint(method = HTTPMethods.GET, path = "validate/{type}")
     public ResponseWrapper<String> validateByType(
             @PathParam("type") String type,
@@ -58,11 +49,6 @@ public class UtilHandler {
         return ResponseWrapper.ok(String.valueOf(result));
     }
 
-    /**
-     * GET /demo/instance
-     *
-     * Demonstra LifecyclePolicy.PER_REQUEST: cada requisição cria um UtilHandler novo.
-     */
     @Endpoint(method = HTTPMethods.GET, path = "demo/instance")
     public ResponseWrapper<String> instanceInfo() {
         return ResponseWrapper.ok(
@@ -72,11 +58,6 @@ public class UtilHandler {
                         + "; createdAt=" + createdAt);
     }
 
-    /**
-     * POST /echo
-     *
-     * Demonstra: @BodyParam + @HeaderParam("X-Transform")
-     */
     @Endpoint(method = HTTPMethods.POST, path = "echo")
     public ResponseWrapper<String> echo(
             @BodyParam String body,

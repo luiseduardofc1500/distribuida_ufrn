@@ -119,7 +119,9 @@ public class GatewayTCP {
                 target = roundRobin(isEmailServices, isEmailIndex);
             } else if ("/ispassword".equalsIgnoreCase(path)) {
                 target = roundRobin(isPasswordServices, isPasswordIndex);
-            } else if ("/echo".equalsIgnoreCase(path) || path.toLowerCase().startsWith("/validate/")) {
+            } else if ("/echo".equalsIgnoreCase(path)
+                    || path.toLowerCase().startsWith("/validate/")
+                    || path.toLowerCase().startsWith("/demo/")) {
                 target = getAnyAvailableInstance();
             } else {
                 writeResponse(socket, buildSimpleResponse(404, "Not Found"));
